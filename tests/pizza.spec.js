@@ -225,3 +225,142 @@ test('admin creates new franchise', async ({ page }) => {
   await page.getByRole('textbox', { name: 'franchisee admin email' }).fill('f@jwt.com');
   await page.getByRole('button', { name: 'Create' }).click();
 });
+
+test.describe('Close Franchise Tests', () => {
+    test('displays close franchise confirmation and handles closure', async ({ page }) => {
+      // Mock the franchise data
+      const mockFranchise = {
+        id: 1,
+        name: 'Test Franchise',
+        stores: [
+          { id: 1, name: 'Store 1' },
+          { id: 2, name: 'Store 2' }
+        ]
+      };
+  
+      // Setup auth for admin access
+      await page.route('*/**/api/auth', async route => {
+        await route.fulfill({ 
+          json: { 
+            user: { 
+              id: 1, 
+              name: 'Admin', 
+              email: 'admin@test.com', 
+              roles: [{ role: 'admin' }] 
+            }, 
+            token: 'test-token' 
+          } 
+        });
+      });
+  
+      // Mock franchise deletion endpoint
+      await page.route('*/**/api/franchise/*', async route => {
+        if (route.request().method() === 'DELETE') {
+          await route.fulfill({ json: { success: true } });
+        }
+      });
+  
+      // Mock franchises list endpoint
+      await page.route('*/**/api/franchise', async route => {
+        if (route.request().method() === 'GET') {
+          await route.fulfill({ json: [mockFranchise] });
+        }
+      });
+  
+      // Navigate to admin dashboard first
+      await page.goto('/');
+      await page.getByRole('link', { name: 'Login' }).click();
+      await page.getByRole('textbox', { name: 'Email address' }).fill('admin@test.com');
+      await page.getByRole('textbox', { name: 'Password' }).fill('admin');
+      await page.getByRole('button', { name: 'Login' }).click();
+  
+      // Go to admin page and click delete franchise
+      await page.getByRole('link', { name: 'Admin' }).click();
+      await page.getByRole('row', { name: 'Test Franchise' }).getByRole('button').click();
+  
+      // Verify close franchise page content
+      await expect(page.getByRole('heading')).toContainText('Sorry to see you go');
+      await expect(page.getByText('Are you sure you want to close the')).toBeVisible();
+      await expect(page.getByText('Test Franchise')).toBeVisible();
+      await expect(page.getByText('franchise? This will close all associated stores and cannot be restored.')).toBeVisible();
+  
+      // Verify buttons exist
+      await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible();
+  
+      // Test cancel button
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      await expect(page.getByRole('heading')).toContainText("Mama Ricci's kitchen");
+  
+      // Go back to close franchise page
+      await page.getByRole('row', { name: 'Test Franchise' }).getByRole('button').click();
+  
+      // Test close button
+      await page.getByRole('button', { name: 'Close' }).click();
+      
+      // Verify redirect after closing
+      await expect(page.getByRole('heading')).toContainText("Mama Ricci's kitchen");
+    });
+  
+  
+    test('displays error message when franchise closure fails', async ({ page }) => {
+      // Mock the franchise data
+      const mockFranchise = {
+        id: 1,
+        name: 'Test Franchise',
+        stores: [
+          { id: 1, name: 'Store 1' },
+          { id: 2, name: 'Store 2' }
+        ]
+      };
+  
+      // Setup auth
+      await page.route('*/**/api/auth', async route => {
+        await route.fulfill({ 
+          json: { 
+            user: { 
+              id: 1, 
+              name: 'Admin', 
+              email: 'admin@test.com', 
+              roles: [{ role: 'admin' }] 
+            }, 
+            token: 'test-token' 
+          } 
+        });
+      });
+  
+      // Mock franchise endpoints with error
+      await page.route('*/**/api/franchise/*', async route => {
+        if (route.request().method() === 'DELETE') {
+          await route.fulfill({ 
+            status: 500,
+            json: { message: 'Failed to close franchise' }
+          });
+        }
+      });
+  
+      // Mock franchises list
+      await page.route('*/**/api/franchise', async route => {
+        if (route.request().method() === 'GET') {
+          await route.fulfill({ json: [mockFranchise] });
+        }
+      });
+  
+      // Navigate through admin flow
+      await page.goto('/');
+      await page.getByRole('link', { name: 'Login' }).click();
+      await page.getByRole('textbox', { name: 'Email address' }).fill('admin@test.com');
+      await page.getByRole('textbox', { name: 'Password' }).fill('admin');
+      await page.getByRole('button', { name: 'Login' }).click();
+      await page.getByRole('link', { name: 'Admin' }).click();
+      await page.getByRole('row', { name: 'Test Franchise' }).getByRole('button').click();
+  
+      // Try to close franchise
+      await page.getByRole('button', { name: 'Close' }).click();
+      
+      // Should show error message and stay on same page
+      await expect(page.getByText('Sorry to see you go')).toBeVisible();
+      await expect(page.getByText('Test Franchise')).toBeVisible();
+    });
+  });
+
