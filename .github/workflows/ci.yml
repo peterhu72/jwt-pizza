@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 jobs:
   build:
-    name: Build
+    name: Build frontend
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.set_version.outputs.version }}
@@ -15,24 +15,22 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
-
       - name: set version
         id: set_version
         run: |
-          version=$(date +'%Y%m%d.%H%M%S')
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          printf '{"version": "%s" }' "$version" > public/version.json
+          echo "version=$(date +'%Y%m%d.%H%M%S')" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
 
       - name: Build
         run: |
+          printf '{"version": "%s" }' ${{steps.set_version.outputs.version}} > public/version.json
           npm ci && npm run build
-          cp dist/index.html dist/404.html
 
-      - name: Update dist artifact
+      - name: Update pages artifact
         uses: actions/upload-artifact@v4
         with:
           name: package
@@ -55,8 +53,8 @@ jobs:
     env:
       version: ${{ needs.build.outputs.version }}
     environment:
-      name: production
-      url: https://pizza.peterhu72.click
+      name: staging
+      url: https://stage-pizza.byucsstudent.click
     steps:
       - name: Create OIDC token to AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -65,7 +63,7 @@ jobs:
           aws-region: us-east-1
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT }}:role/${{ secrets.CI_IAM_ROLE }}
   
-      - name: Download dist artifact
+      - name: Download pages artifact
         uses: actions/download-artifact@v4
         with:
           name: package
@@ -73,8 +71,19 @@ jobs:
   
       - name: Push to AWS S3
         run: |
-          echo Deploying $version
           aws s3 cp dist s3://${{ secrets.APP_BUCKET }}/$version --recursive
+      - name: Update staging version
+        run: |
+          # Get the current distribution and update it to use the new version
+          aws cloudfront get-distribution-config --id ${{ secrets.DISTRIBUTION_ID }} > original.json
+          etag=$(jq -r '.ETag' original.json)
+          jq '.DistributionConfig' original.json > request.json
+          jq --arg version "/$version" '.Origins.Items[0].OriginPath = $version' request.json > finalRequest.json
+          aws cloudfront update-distribution --id ${{ secrets.DISTRIBUTION_ID }} --if-match $etag --distribution-config file://finalRequest.json
+
+          # Wait for the distribution to deploy and then invalidate the cache
+          while [ "$(aws cloudfront get-distribution --id ${{ secrets.DISTRIBUTION_ID }} --query 'Distribution.Status' --output text)" != "Deployed" ]; do echo "Distribution is still updating..."; sleep 5; done
+          aws cloudfront create-invalidation --distribution-id ${{ secrets.DISTRIBUTION_ID }} --paths "/*"
   release:
     needs:
       - build
